@@ -1,19 +1,30 @@
-export function generatePalette(img: HTMLImageElement): { palette: string[], markers: { x: number; y: number; color: string }[] } {
-  const canvas = document.createElement('canvas');
-  canvas.width = img.width;
-  canvas.height = img.height;
-  const ctx = canvas.getContext('2d');
+import {
+  rgbToHex,
+} from "~/utils/colorUtils";
+
+export function generatePalette(img: HTMLImageElement): {
+  palette: string[];
+  markers: { x: number; y: number; color: string }[];
+} {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return { palette: [], markers: [] };
 
-  ctx.drawImage(img, 0, 0, img.width, img.height);
+  // Resize image for faster processing
+  const maxSize = 400;
+  const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+  canvas.width = img.width * scale;
+  canvas.height = img.height * scale;
+
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const pixels = imageData.data;
 
-  // Sample pixels
-  const sampleSize = 1000;
+  // Sample pixels more efficiently
+  const sampleSize = Math.min(20000, pixels.length / 4);
   const sampledPixels: number[][] = [];
   for (let i = 0; i < sampleSize; i++) {
-    const randomIndex = Math.floor(Math.random() * pixels.length / 4) * 4;
+    const randomIndex = Math.floor((Math.random() * pixels.length) / 4) * 4;
     sampledPixels.push([
       pixels[randomIndex],
       pixels[randomIndex + 1],
@@ -26,70 +37,84 @@ export function generatePalette(img: HTMLImageElement): { palette: string[], mar
   const centroids = kMeansClustering(sampledPixels, k);
 
   // Convert centroids to hex colors and find their positions
-  const newPalette: string[] = [];
-  const newMarkers: { x: number; y: number; color: string }[] = [];
+  const newPalette: string[] = new Array(k);
+  const newMarkers: { x: number; y: number; color: string }[] = new Array(k);
 
-  centroids.forEach(centroid => {
-    const hexColor = `#${centroid.map(c => Math.round(c).toString(16).padStart(2, '0')).join('')}`;
-    newPalette.push(hexColor);
+  for (let i = 0; i < k; i++) {
+    const centroid = centroids[i];
+    const hexColor = rgbToHex(Math.round(centroid[0]), Math.round(centroid[1]), Math.round(centroid[2]));
+    newPalette[i] = hexColor;
 
     // Find the pixel closest to this centroid
     let minDistance = Infinity;
     let closestPixelIndex = -1;
 
-    for (let i = 0; i < pixels.length; i += 4) {
-      const pixelColor = [pixels[i], pixels[i + 1], pixels[i + 2]];
-      const dist = distance(pixelColor, centroid);
+    for (let j = 0; j < pixels.length; j += 4) {
+      const dist = distance([pixels[j], pixels[j + 1], pixels[j + 2]], centroid);
       if (dist < minDistance) {
         minDistance = dist;
-        closestPixelIndex = i;
+        closestPixelIndex = j;
       }
     }
 
     const x = (closestPixelIndex / 4) % canvas.width;
-    const y = Math.floor((closestPixelIndex / 4) / canvas.width);
-    newMarkers.push({ x, y, color: hexColor });
-  });
+    const y = Math.floor(closestPixelIndex / 4 / canvas.width);
+    newMarkers[i] = { x: x / scale, y: y / scale, color: hexColor };
+  }
 
   return { palette: newPalette, markers: newMarkers };
 }
 
-function kMeansClustering(pixels: number[][], k: number): number[][] {
+function kMeansClustering(pixels: number[][], k: number, maxIterations: number = 10): number[][] {
+  if (pixels.length === 0 || k <= 0) {
+    return [];
+  }
+
+  const numChannels = pixels[0].length;
+
   // Initialize centroids randomly
-  let centroids = pixels.slice(0, k);
-  let oldCentroids: number[][] = [];
-  let iterations = 0;
-  const maxIterations = 50;
+  let centroids = Array.from({ length: k }, () => 
+    pixels[Math.floor(Math.random() * pixels.length)].slice()
+  );
 
-  while (!arraysEqual(centroids, oldCentroids) && iterations < maxIterations) {
-    oldCentroids = [...centroids];
-    iterations++;
+  for (let iteration = 0; iteration < maxIterations; iteration++) {
+    // Assign pixels to clusters
+    const clusters: number[][][] = Array.from({ length: k }, () => []);
+    for (const pixel of pixels) {
+      const closestCentroidIndex = centroids.reduce(
+        (minIndex, centroid, index, arr) => 
+          distance(pixel, centroid) < distance(pixel, arr[minIndex]) ? index : minIndex,
+        0
+      );
+      clusters[closestCentroidIndex].push(pixel);
+    }
 
-    // Assign pixels to centroids
-    const assignments = pixels.map(pixel => 
-      centroids.reduce((iMin, centroid, i, arr) => 
-        distance(pixel, centroid) < distance(pixel, arr[iMin]) ? i : iMin, 0)
-    );
-
-    // Move centroids
-    centroids = centroids.map((_, i) => {
-      const assignedPixels = pixels.filter((_, j) => assignments[j] === i);
-      return assignedPixels.length > 0
-        ? assignedPixels.reduce((sum, p) => sum.map((s, i) => s + p[i]))
-            .map(s => s / assignedPixels.length)
-        : centroids[i];
+    // Update centroids
+    const newCentroids = clusters.map(cluster => {
+      if (cluster.length === 0) {
+        // If a cluster is empty, initialize with a random pixel
+        return pixels[Math.floor(Math.random() * pixels.length)].slice();
+      }
+      const sum = new Array(numChannels).fill(0);
+      for (const pixel of cluster) {
+        for (let i = 0; i < numChannels; i++) {
+          sum[i] += pixel[i];
+        }
+      }
+      return sum.map(s => s / cluster.length);
     });
+
+    // Check for convergence
+    if (centroids.every((centroid, i) => distance(centroid, newCentroids[i]) < 1)) {
+      break;
+    }
+
+    centroids = newCentroids;
   }
 
   return centroids;
 }
 
 function distance(a: number[], b: number[]): number {
-  return Math.sqrt(a.reduce((sum, _, i) => sum + Math.pow(a[i] - b[i], 2), 0));
-}
-
-function arraysEqual(a: number[][], b: number[][]): boolean {
-  return a.length === b.length && a.every((row, i) => 
-    row.length === b[i].length && row.every((val, j) => val === b[i][j])
-  );
+  return Math.sqrt(a.reduce((sum, val, i) => sum + Math.pow(val - b[i], 2), 0));
 }

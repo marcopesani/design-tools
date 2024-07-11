@@ -35,18 +35,22 @@ function ImageCanvas({ imageSrc }: ImageCanvasProps) {
     return () => window.removeEventListener('resize', updateCanvasSize);
   }, []);
 
+  const generateNewPalette = useCallback((img: HTMLImageElement) => {
+    const { palette, markers } = generatePalette(img);
+    setPalette(palette);
+    setColorMarkers(markers);
+  }, [setPalette]);
+
   useEffect(() => {
     if (imageSrc) {
       const img = new Image();
       img.onload = () => {
         setSelectedImage(img);
-        const { palette, markers } = generatePalette(img);
-        setPalette(palette);
-        setColorMarkers(markers);
+        generateNewPalette(img);
       };
       img.src = imageSrc;
     }
-  }, [imageSrc, setPalette]);
+  }, [imageSrc, generateNewPalette]);
 
   const { drawWidth, drawHeight, offsetX, offsetY } = useMemo(() => {
     if (!selectedImage || !canvasSize.width || !canvasSize.height) {
@@ -129,12 +133,17 @@ function ImageCanvas({ imageSrc }: ImageCanvasProps) {
       return distance <= 10; // Assuming marker size is 10
     });
 
-    if (isClick && interactedMarker) {
-      setSelectedColor(interactedMarker.color);
+    if (isClick) {
+      if (interactedMarker) {
+        setSelectedColor(interactedMarker.color);
+      } else {
+        // Regenerate palette when clicking on the image (not on a marker)
+        generateNewPalette(selectedImage);
+      }
     } else {
       setIsHoveringMarker(!!interactedMarker);
     }
-  }, [colorMarkers, selectedImage, setSelectedColor, drawWidth, drawHeight, offsetX, offsetY]);
+  }, [colorMarkers, selectedImage, setSelectedColor, drawWidth, drawHeight, offsetX, offsetY, generateNewPalette]);
 
   return (
     <canvas 
