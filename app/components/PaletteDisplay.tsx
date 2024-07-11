@@ -49,59 +49,71 @@ const PaletteDisplay: React.FC = () => {
   return (
     <section className="h-1/2">
       <div className="flex h-full">
-        {palette.map((color, index) => {
-          const complementaryColor = getComplementaryColor(color);
-          const contrast = calculateContrast(color, complementaryColor);
-          const wcagClass = getWCAGClassification(contrast);
-          return (
-            <div
-              key={index}
-              className="flex-1 flex flex-col"
-              style={{ borderColor: color === selectedColor ? "white" : color }}
-            >
+        {palette
+          .sort((a, b) => {
+            return a.localeCompare(b);
+          })
+          .map((color, index) => {
+            const complementaryColor = getComplementaryColor(color);
+            const contrast = calculateContrast(color, complementaryColor);
+            const wcagClass = getWCAGClassification(contrast);
+            return (
               <div
-                role="button"
-                tabIndex={0}
-                className="flex-grow flex flex-col justify-between p-4 cursor-pointer border-4"
-                style={{ 
-                  backgroundColor: color,
-                  borderColor: color === selectedColor ? "white" : color
-                }}
-                onClick={() => handleColorSelection(color)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    handleColorSelection(color);
-                  }
+                key={index}
+                className="flex-1 flex flex-col"
+                style={{
+                  borderColor: color === selectedColor ? "white" : color,
                 }}
               >
-                <div className="text-xs" style={{ color: complementaryColor }}>
-                  <div>{color}</div>
-                  <div>{hexToRgb(color)}</div>
-                </div>
-                <div className="text-center text-3xl">
+                <div
+                  role="button"
+                  tabIndex={0}
+                  className="flex-grow flex flex-col justify-between p-4 cursor-pointer border-4"
+                  style={{
+                    backgroundColor: color,
+                    borderColor: color === selectedColor ? "white" : color,
+                  }}
+                  onClick={() => handleColorSelection(color)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      handleColorSelection(color);
+                    }
+                  }}
+                >
                   <div
-                    className="font-bold"
+                    className="text-xs"
                     style={{ color: complementaryColor }}
                   >
-                    Aa
+                    <div>{color}</div>
+                    <div>{hexToRgb(color)}</div>
                   </div>
-                  <div style={{ color: complementaryColor }}>Aa</div>
-                </div>
+                  <div className="text-center text-3xl">
+                    <div
+                      className="font-bold"
+                      style={{ color: complementaryColor }}
+                    >
+                      Aa
+                    </div>
+                    <div style={{ color: complementaryColor }}>Aa</div>
+                  </div>
 
-                <div className="text-xs" style={{ color: complementaryColor }}>
-                  <div>Contrast: {contrast.toFixed(2)}</div>
-                  <div>WCAG: {wcagClass}</div>
+                  <div
+                    className="text-xs"
+                    style={{ color: complementaryColor }}
+                  >
+                    <div>Contrast: {contrast.toFixed(2)}</div>
+                    <div>WCAG: {wcagClass}</div>
+                  </div>
+                </div>
+                <div
+                  className="h-1/4 p-2 text-xs flex items-center justify-center"
+                  style={{ backgroundColor: complementaryColor, color: color }}
+                >
+                  Complementary: {complementaryColor}
                 </div>
               </div>
-              <div
-                className="h-1/4 p-2 text-xs flex items-center justify-center"
-                style={{ backgroundColor: complementaryColor, color: color }}
-              >
-                Complementary: {complementaryColor}
-              </div>
-            </div>
-          );
-        })}
+            );
+          })}
       </div>
     </section>
   );

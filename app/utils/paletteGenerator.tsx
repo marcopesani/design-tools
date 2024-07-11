@@ -1,8 +1,19 @@
-import {
-  rgbToHex,
-} from "~/utils/colorUtils";
+import { rgbToHex } from "~/utils/colorUtils";
 
-export function generatePalette(img: HTMLImageElement): {
+const MAX_IMAGE_SIZE = 800;
+const BYTES_PER_PIXEL = 4;
+const MAX_ITERATIONS = 20;
+const CUBE_SIZE = 16;
+const TOTAL_CUBES = 4096; // 256 / 16 = 16, 16^3 = 4096
+const THR = 10;
+
+export function generatePalette(
+  img: HTMLImageElement,
+  k = 5,
+  baseColor = [0, 0, 0],
+  basePosition: [number,number] = [0, 0],
+  samplingRate = 0.125
+): {
   palette: string[];
   markers: { x: number; y: number; color: string }[];
 } {
@@ -11,8 +22,7 @@ export function generatePalette(img: HTMLImageElement): {
   if (!ctx) return { palette: [], markers: [] };
 
   // Resize image for faster processing
-  const maxSize = 400;
-  const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+  const scale = Math.min(1, MAX_IMAGE_SIZE / Math.max(img.width, img.height));
   canvas.width = img.width * scale;
   canvas.height = img.height * scale;
 
@@ -20,101 +30,151 @@ export function generatePalette(img: HTMLImageElement): {
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const pixels = imageData.data;
 
-  // Sample pixels more efficiently
-  const sampleSize = Math.min(20000, pixels.length / 4);
-  const sampledPixels: number[][] = [];
-  for (let i = 0; i < sampleSize; i++) {
-    const randomIndex = Math.floor((Math.random() * pixels.length) / 4) * 4;
-    sampledPixels.push([
-      pixels[randomIndex],
-      pixels[randomIndex + 1],
-      pixels[randomIndex + 2]
-    ]);
-  }
+  // Generate initial palette
+  const initialPalette = generateInitialPalette(pixels, k, baseColor);
 
-  // K-means clustering
-  const k = 5; // Number of colors in the palette
-  const centroids = kMeansClustering(sampledPixels, k);
+  // Fast K-means algorithm
+  const { palette, markers } = fastKMeans(pixels, initialPalette, k, samplingRate, scale, basePosition, canvas);
 
-  // Convert centroids to hex colors and find their positions
-  const newPalette: string[] = new Array(k);
-  const newMarkers: { x: number; y: number; color: string }[] = new Array(k);
-
-  for (let i = 0; i < k; i++) {
-    const centroid = centroids[i];
-    const hexColor = rgbToHex(Math.round(centroid[0]), Math.round(centroid[1]), Math.round(centroid[2]));
-    newPalette[i] = hexColor;
-
-    // Find the pixel closest to this centroid
-    let minDistance = Infinity;
-    let closestPixelIndex = -1;
-
-    for (let j = 0; j < pixels.length; j += 4) {
-      const dist = distance([pixels[j], pixels[j + 1], pixels[j + 2]], centroid);
-      if (dist < minDistance) {
-        minDistance = dist;
-        closestPixelIndex = j;
-      }
-    }
-
-    const x = (closestPixelIndex / 4) % canvas.width;
-    const y = Math.floor(closestPixelIndex / 4 / canvas.width);
-    newMarkers[i] = { x: x / scale, y: y / scale, color: hexColor };
-  }
-
-  return { palette: newPalette, markers: newMarkers };
+  return { palette, markers };
 }
 
-function kMeansClustering(pixels: number[][], k: number, maxIterations: number = 10): number[][] {
-  if (pixels.length === 0 || k <= 0) {
-    return [];
+function generateInitialPalette(pixels: Uint8ClampedArray, k: number, baseColor: number[]): number[][] {
+  const cubes: number[][][] = Array(TOTAL_CUBES).fill(null).map(() => []);
+  
+  for (let i = 0; i < pixels.length; i += BYTES_PER_PIXEL) {
+    const r = pixels[i];
+    const g = pixels[i + 1];
+    const b = pixels[i + 2];
+    const cubeIndex = Math.floor(r / CUBE_SIZE) * 256 + Math.floor(g / CUBE_SIZE) * 16 + Math.floor(b / CUBE_SIZE);
+    cubes[cubeIndex].push([r, g, b]);
   }
 
-  const numChannels = pixels[0].length;
+  const validCubes = cubes.filter(cube => cube.length >= THR);
+  const N = validCubes.length;
+  const initialColors: number[][] = [baseColor];
 
-  // Initialize centroids randomly
-  let centroids = Array.from({ length: k }, () => 
-    pixels[Math.floor(Math.random() * pixels.length)].slice()
-  );
+  while (initialColors.length < k) {
+    let maxDistN = -1;
+    let selectedColor: number[] | null = null;
 
-  for (let iteration = 0; iteration < maxIterations; iteration++) {
-    // Assign pixels to clusters
-    const clusters: number[][][] = Array.from({ length: k }, () => []);
-    for (const pixel of pixels) {
-      const closestCentroidIndex = centroids.reduce(
-        (minIndex, centroid, index, arr) => 
-          distance(pixel, centroid) < distance(pixel, arr[minIndex]) ? index : minIndex,
-        0
-      );
-      clusters[closestCentroidIndex].push(pixel);
+    for (let i = 0; i < N; i++) {
+      if (validCubes[i].length === 0) continue;
+      const centerColor = validCubes[i].reduce((sum, color) => [sum[0] + color[0], sum[1] + color[1], sum[2] + color[2]])
+        .map(channel => Math.round(channel / validCubes[i].length));
+      
+      const minDist = Math.min(...initialColors.map(color => colorDistance(centerColor, color)));
+      const distN = minDist * Math.sqrt(validCubes[i].length);
+
+      if (distN > maxDistN) {
+        maxDistN = distN;
+        selectedColor = centerColor;
+      }
     }
 
-    // Update centroids
-    const newCentroids = clusters.map(cluster => {
-      if (cluster.length === 0) {
-        // If a cluster is empty, initialize with a random pixel
-        return pixels[Math.floor(Math.random() * pixels.length)].slice();
-      }
-      const sum = new Array(numChannels).fill(0);
-      for (const pixel of cluster) {
-        for (let i = 0; i < numChannels; i++) {
-          sum[i] += pixel[i];
-        }
-      }
-      return sum.map(s => s / cluster.length);
-    });
-
-    // Check for convergence
-    if (centroids.every((centroid, i) => distance(centroid, newCentroids[i]) < 1)) {
+    if (selectedColor) {
+      initialColors.push(selectedColor);
+    } else {
       break;
     }
-
-    centroids = newCentroids;
   }
 
-  return centroids;
+  return initialColors;
 }
 
-function distance(a: number[], b: number[]): number {
-  return Math.sqrt(a.reduce((sum, val, i) => sum + Math.pow(val - b[i], 2), 0));
+function fastKMeans(
+  pixels: Uint8ClampedArray,
+  initialPalette: number[][],
+  k: number,
+  samplingRate: number,
+  scale: number,
+  basePosition: [number, number],
+  canvas: HTMLCanvasElement // Add this parameter
+): { palette: string[]; markers: { x: number; y: number; color: string }[] } {
+  let palette = initialPalette;
+  let iterations = 0;
+  let prevMSE = Infinity;
+
+  while (iterations < MAX_ITERATIONS) {
+    const clusters: number[][][] = Array(k).fill(null).map(() => []);
+    let mse = 0;
+    let sampledPixels = 0;
+
+    for (let i = 0; i < pixels.length; i += BYTES_PER_PIXEL) {
+      if (Math.random() > samplingRate) continue;
+
+      const pixel = [pixels[i], pixels[i + 1], pixels[i + 2]];
+      let nearestCentroidIndex = 0;
+      let minDistance = Infinity;
+      
+      for (let j = 0; j < palette.length; j++) {
+        const distance = colorDistance(pixel, palette[j]);
+        if (distance < minDistance) {
+          minDistance = distance;
+          nearestCentroidIndex = j;
+        }
+      }
+      
+      clusters[nearestCentroidIndex].push(pixel);
+      mse += minDistance;
+      sampledPixels++;
+    }
+
+    mse /= sampledPixels;
+
+    if (mse >= prevMSE) break;
+    prevMSE = mse;
+
+    // Calculate new centroids
+    palette = clusters.map(cluster => 
+      cluster.length > 0 
+        ? cluster.reduce((sum, pixel) => [sum[0] + pixel[0], sum[1] + pixel[1], sum[2] + pixel[2]])
+            .map(channel => Math.round(channel / cluster.length))
+        : palette[clusters.indexOf(cluster)]
+    );
+
+    iterations++;
+  }
+
+  // Convert palette to hex colors and create markers
+  const hexPalette = palette.map(color => rgbToHex(color[0], color[1], color[2]));
+  const markers = palette.map((color, index) => {
+    if (index === 0) {
+      return { x: basePosition[0], y: basePosition[1], color: hexPalette[0] };
+    } else {
+      // Find a pixel close to this centroid for the marker
+      let minDistance = Infinity;
+      let markerX = 0, markerY = 0;
+      
+      for (let y = 0; y < canvas.height; y++) {
+        for (let x = 0; x < canvas.width; x++) {
+          const i = (y * canvas.width + x) * BYTES_PER_PIXEL;
+          const pixel = [pixels[i], pixels[i + 1], pixels[i + 2]];
+          const distance = colorDistance(pixel, color);
+          
+          if (distance < minDistance) {
+            minDistance = distance;
+            markerX = x;
+            markerY = y;
+          }
+        }
+      }
+
+      return { 
+        x: markerX / scale, 
+        y: markerY / scale, 
+        color: hexPalette[index] 
+      };
+    }
+  });
+
+  return { palette: hexPalette, markers };
+}
+
+function colorDistance(color1: number[], color2: number[]): number {
+  return Math.sqrt(
+    Math.pow(color1[0] - color2[0], 2) +
+    Math.pow(color1[1] - color2[1], 2) +
+    Math.pow(color1[2] - color2[2], 2)
+  );
 }
